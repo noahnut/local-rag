@@ -1,0 +1,20 @@
+# Copy to ~/.config/local-rag/config.yaml
+db: ~/.local/share/local-rag/index.db
+chunk_max_tokens: 400
+
+embedder:
+  provider: ollama              # ollama | openai (reads OPENAI_API_KEY)
+  model: nomic-embed-text       # openai: text-embedding-3-small
+  # url: http://localhost:11434 # openai default: https://api.openai.com/v1
+  # nomic-embed-text expects task prefixes; leave both empty for bge-m3 / OpenAI.
+  query_prefix: "search_query: "
+  document_prefix: "search_document: "
+
+sources:
+  - name: myrepo
+    type: codebase              # source code; respects the root .gitignore
+    path: ~/code/myrepo
+    exclude: ["*_test.go", "testdata/"]   # gitignore syntax
+  - name: notes
+    type: local                 # Markdown / Obsidian vault; frontmatter -> metadata
+    path: ~/Documents/Obsidian
