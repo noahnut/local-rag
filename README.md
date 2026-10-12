@@ -1,59 +1,59 @@
 # local-rag
 
-本機混合檢索（向量 + BM25）的 MCP Server，單一 Go 二進位檔、無 CGO。讓 Claude Code 只取回相關的 Top-K chunks，而不是把整個檔案或目錄讀進 context。
+A local hybrid-search (vector + BM25) MCP server, built as a single Go binary with no CGO. It lets Claude Code fetch only the relevant top-K chunks instead of reading whole files or directories into its context window.
 
-- 儲存：SQLite（`modernc.org/sqlite`）+ FTS5；向量以 BLOB 存放，查詢時在記憶體做 cosine。
-- Embedding：Ollama（預設 `nomic-embed-text`）或 OpenAI `text-embedding-3-small`。
-- 融合：Reciprocal Rank Fusion；查詢若是單一識別符（`parseConfig`、`MAX_SIZE`），會優先採用完整 token 的關鍵字命中。
-- 中文：CJK 字元逐字索引，查詢以雙字詞組比對。
+- Storage: SQLite (`modernc.org/sqlite`) + FTS5; vectors are stored as BLOBs and scored with cosine similarity in memory.
+- Embeddings: Ollama (default `nomic-embed-text`) or OpenAI `text-embedding-3-small`.
+- Fusion: Reciprocal Rank Fusion. When the query is a single identifier (`parseConfig`, `MAX_SIZE`), exact whole-token keyword hits are preferred.
+- CJK: characters are indexed one by one, and queries match them as two-character phrases.
 
-## 安裝
+## Install
 
 ```sh
 CGO_ENABLED=0 go build -o ~/bin/local-rag ./cmd/local-rag
 ollama pull nomic-embed-text
-mkdir -p ~/.config/local-rag && cp config.example.yaml ~/.config/local-rag/config.yaml   # 編輯 sources
+mkdir -p ~/.config/local-rag && cp config.example.yaml ~/.config/local-rag/config.yaml   # then edit sources
 ```
 
-## 使用
+## Usage
 
 ```sh
-local-rag index                 # 增量索引：只重新 embed 有變動的 chunk，並刪除已消失的
-local-rag index --rebuild       # 換 embedding 模型後重建（模型改變時也會自動清空）
-local-rag search -k 5 "how is auth handled"     # 終端機除錯用
+local-rag index                 # incremental: re-embeds only changed chunks and removes deleted ones
+local-rag index --rebuild       # rebuild from scratch (also happens automatically when the embedding model changes)
+local-rag search -k 5 "how is auth handled"     # for debugging in the terminal
 claude mcp add local-rag -- ~/bin/local-rag serve
 ```
 
-## 自動更新
+## Automatic updates
 
-`serve` 在每次 `search` 前會檢查變動（同一個 server 30 秒內最多檢查一次），平常不用手動重跑 `index`：
+Before each `search`, `serve` checks for changes (at most once every 30 seconds per server), so you rarely need to run `index` by hand:
 
-- 修改時間和大小都沒變的檔案只做 stat，不讀內容。
-- 變動在 200 個 chunk 以內：當場更新後再查詢。
-- 超過 200 個（例如切換 branch）：在背景更新，這次先用舊索引回答，結果開頭會附上提示。
-- 從未索引過的大型來源不會在 server 裡自動建立，會提示改用 `local-rag index`。
-- 多個 Claude Code 會話共用同一個資料庫時，以 SQLite 中的鎖避免重複 embed。
+- Files whose modification time and size are unchanged are only stat'ed, not read.
+- Up to 200 changed chunks: the index is updated inline before the query runs.
+- More than 200 (e.g. after switching branches): the update runs in the background, the query is answered from the existing index, and the result starts with a note saying so.
+- A large source that has never been indexed is not built from inside the server; you are told to run `local-rag index` instead.
+- When several Claude Code sessions share one database, a lock in SQLite keeps them from embedding the same changes twice.
 
-第一次建立索引和 `--rebuild` 仍然用 CLI。
+The first index build and `--rebuild` still go through the CLI.
 
 ## MCP tools
 
-| tool | 參數 | 說明 |
+| tool | parameters | description |
 |---|---|---|
-| `search` | `query`, `top_k`=5, `source`, `max_tokens`=1200 | 回傳 `path:start-end \| id=...` 加上 chunk 內容，總量受 token 預算限制 |
-| `get_chunk` | `id` | 取回單一 chunk |
-| `list_sources` | — | 各來源的 chunk 數 |
+| `search` | `query`, `top_k`=5, `source`, `max_tokens`=1200 | Returns `path:start-end \| id=...` plus chunk content, capped by the token budget |
+| `get_chunk` | `id` | Fetches a single chunk |
+| `list_sources` | — | Chunk count per source |
 
-Embedding 服務無法連線時，`search` 會退回只用 BM25 的結果。
+If the embedding service is unreachable, `search` falls back to BM25-only results.
 
-## 資料來源
+## Sources
 
-| type | 內容 | 增量依據 |
+| type | content | change detection |
 |---|---|---|
-| `codebase` | 程式碼目錄，遵守根目錄 `.gitignore` | 檔案修改時間與大小 |
-| `local` | Markdown / Obsidian vault，frontmatter 轉成 metadata | 檔案修改時間與大小 |
-| `confluence` | Confluence Cloud 的 space（REST API v2），頁面轉成 Markdown | 頁面版本號 |
+| `codebase` | Source code directory; respects the root `.gitignore` | File modification time and size |
+| `local` | Markdown / Obsidian vault; frontmatter becomes metadata | File modification time and size |
+| `confluence` | Confluence Cloud spaces (REST API v2), pages converted to Markdown | Page version |
 
-Confluence 的帳密只從環境變數讀取：`CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN`（Cloud），或只設 `CONFLUENCE_API_TOKEN` 以 Bearer PAT 送出。`serve` 預設每小時才重新檢查一次 Confluence（`refresh_interval`），連不上時只記錄錯誤、不影響其他來源。用 `claude mcp add` 註冊時記得把環境變數一起帶入（`-e CONFLUENCE_API_TOKEN=...`），或在啟動 Claude Code 的 shell 裡先設定好。
+Confluence credentials are read only from environment variables: `CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN` (Cloud basic auth), or `CONFLUENCE_API_TOKEN` alone to send it as a Bearer personal access token. By default `serve` re-checks Confluence at most once an hour (`refresh_interval`); if it can't connect, it logs the error and the other sources are unaffected. Set the variables in the shell that launches Claude Code so the MCP server inherits them. Passing them with `claude mcp add -e` also works, but stores the token in plain text in `~/.claude.json`.
 
-新增其他來源（例如 Notion）時，實作 `internal/source.DocumentSource`（`Name()`、`FetchDocuments()`），並在 `internal/config` 的 `Source.Build` 註冊即可；若能便宜地判斷哪些文件沒變，再實作 `source.Incremental`。
+To add another source (e.g. Notion), implement `internal/source.DocumentSource` (`Name()`, `FetchDocuments()`) and register it in `Source.Build` in `internal/config`. If unchanged documents can be detected cheaply, also implement `source.Incremental`.
