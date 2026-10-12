@@ -113,8 +113,11 @@ func runIndex(ctx context.Context, cfg *config.Config, st *store.Store, emb embe
 	if err != nil {
 		return err
 	}
-	if rebuild || (prev != "" && prev != model) {
-		log.Printf("clearing index (embedding model %q -> %q)", prev, model)
+	if prev != "" && prev != model {
+		log.Printf("embedding model changed (%s -> %s); rebuilding index", prev, model)
+		rebuild = true
+	}
+	if rebuild {
 		if err := st.Clear(ctx); err != nil {
 			return err
 		}
