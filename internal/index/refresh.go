@@ -23,9 +23,12 @@ type Refresher struct {
 	Interval  time.Duration // minimum time between checks
 	SyncLimit int           // pending chunks applied inline; more go to the background
 	LeaseTTL  time.Duration
+	// Intervals overrides Interval per source name, e.g. so remote APIs are polled hourly.
+	Intervals map[string]time.Duration
 
 	mu        sync.Mutex // held for the whole refresh, including a background apply
 	lastCheck time.Time
+	lastRun   map[string]time.Time
 	bgPending atomic.Int64
 }
 
@@ -72,7 +75,15 @@ func (r *Refresher) Refresh(ctx context.Context) string {
 	var notes []string
 	var plans []*Plan
 	total := 0
+	if r.lastRun == nil {
+		r.lastRun = map[string]time.Time{}
+	}
 	for _, src := range r.Sources {
+		if iv, ok := r.Intervals[src.Name()]; ok && time.Since(r.lastRun[src.Name()]) < iv {
+			continue
+		}
+		// Recorded before planning so a failing remote source isn't retried on every search.
+		r.lastRun[src.Name()] = time.Now()
 		p, err := r.Indexer.Plan(ctx, src)
 		if err != nil {
 			log.Printf("refresh %s: %v", src.Name(), err)

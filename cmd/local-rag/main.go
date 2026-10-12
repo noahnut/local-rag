@@ -94,8 +94,17 @@ func newIndexer(cfg *config.Config, st *store.Store, emb embed.Embedder) *index.
 
 func newRefresher(cfg *config.Config, st *store.Store, emb embed.Embedder) *index.Refresher {
 	var sources []source.DocumentSource
+	intervals := map[string]time.Duration{}
 	for _, sc := range cfg.Sources {
-		sources = append(sources, sc.Build())
+		src, err := sc.Build()
+		if err != nil {
+			log.Printf("auto-refresh disabled for %s: %v", sc.Name, err)
+			continue
+		}
+		sources = append(sources, src)
+		if sc.RefreshInterval > 0 {
+			intervals[sc.Name] = sc.RefreshInterval
+		}
 	}
 	return &index.Refresher{
 		Indexer:   newIndexer(cfg, st, emb),
@@ -104,6 +113,7 @@ func newRefresher(cfg *config.Config, st *store.Store, emb embed.Embedder) *inde
 		Interval:  30 * time.Second,
 		SyncLimit: 200,
 		LeaseTTL:  15 * time.Minute,
+		Intervals: intervals,
 	}
 }
 
@@ -127,15 +137,28 @@ func runIndex(ctx context.Context, cfg *config.Config, st *store.Store, emb embe
 	}
 
 	ix := newIndexer(cfg, st, emb)
+	var failed []string
 	for _, sc := range cfg.Sources {
 		if only != "" && sc.Name != only {
 			continue
 		}
-		stats, err := ix.Index(ctx, sc.Build())
-		if err != nil {
-			return fmt.Errorf("%s: %w", sc.Name, err)
+		// One unreachable source (e.g. Confluence off VPN) shouldn't block the others.
+		src, err := sc.Build()
+		if err == nil {
+			var stats index.Stats
+			if stats, err = ix.Index(ctx, src); err == nil {
+				log.Printf("%s: %d docs changed, %d chunks embedded, %d deleted", sc.Name, stats.Documents, stats.Embedded, stats.Deleted)
+				continue
+			}
 		}
-		log.Printf("%s: %d docs changed, %d chunks embedded, %d deleted", sc.Name, stats.Documents, stats.Embedded, stats.Deleted)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.Printf("%s: %v", sc.Name, err)
+		failed = append(failed, sc.Name)
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("failed sources: %s", strings.Join(failed, ", "))
 	}
 	return nil
 }

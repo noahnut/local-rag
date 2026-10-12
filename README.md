@@ -46,6 +46,14 @@ claude mcp add local-rag -- ~/bin/local-rag serve
 
 Embedding 服務無法連線時，`search` 會退回只用 BM25 的結果。
 
-## 新增資料來源
+## 資料來源
 
-實作 `internal/source.DocumentSource`（`Name()`、`FetchDocuments()`），並在 `internal/config` 的 `Source.Build` 註冊即可（例如 Confluence、Notion）。
+| type | 內容 | 增量依據 |
+|---|---|---|
+| `codebase` | 程式碼目錄，遵守根目錄 `.gitignore` | 檔案修改時間與大小 |
+| `local` | Markdown / Obsidian vault，frontmatter 轉成 metadata | 檔案修改時間與大小 |
+| `confluence` | Confluence Cloud 的 space（REST API v2），頁面轉成 Markdown | 頁面版本號 |
+
+Confluence 的帳密只從環境變數讀取：`CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN`（Cloud），或只設 `CONFLUENCE_API_TOKEN` 以 Bearer PAT 送出。`serve` 預設每小時才重新檢查一次 Confluence（`refresh_interval`），連不上時只記錄錯誤、不影響其他來源。用 `claude mcp add` 註冊時記得把環境變數一起帶入（`-e CONFLUENCE_API_TOKEN=...`），或在啟動 Claude Code 的 shell 裡先設定好。
+
+新增其他來源（例如 Notion）時，實作 `internal/source.DocumentSource`（`Name()`、`FetchDocuments()`），並在 `internal/config` 的 `Source.Build` 註冊即可；若能便宜地判斷哪些文件沒變，再實作 `source.Incremental`。

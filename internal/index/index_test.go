@@ -219,3 +219,24 @@ func TestRefreshModelMismatch(t *testing.T) {
 		t.Error("must not embed with a different model")
 	}
 }
+
+func TestRefreshPerSourceInterval(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "a.go"), "func a() {}")
+	r, emb := newRefresher(t, root, 10)
+	r.Interval = 0
+	r.Intervals = map[string]time.Duration{"repo": time.Hour}
+
+	r.Refresh(ctx)
+	writeFile(t, filepath.Join(root, "b.go"), "func b() {}")
+	r.Refresh(ctx)
+	if emb.texts != 1 {
+		t.Errorf("source with a 1h interval was re-checked: embedded %d texts", emb.texts)
+	}
+	r.lastRun["repo"] = time.Time{}
+	r.Refresh(ctx)
+	if emb.texts != 2 {
+		t.Errorf("after its interval: embedded %d texts, want 2", emb.texts)
+	}
+}

@@ -18,3 +18,11 @@ sources:
   - name: notes
     type: local                 # Markdown / Obsidian vault; frontmatter -> metadata
     path: ~/Documents/Obsidian
+  # Confluence Cloud. Credentials come from the environment, never this file:
+  #   CONFLUENCE_EMAIL + CONFLUENCE_API_TOKEN (Cloud basic auth), or only
+  #   CONFLUENCE_API_TOKEN to send it as a Bearer personal access token.
+  - name: wiki
+    type: confluence
+    url: https://example.atlassian.net
+    spaces: [OBS]
+    refresh_interval: 1h        # how often `serve` re-checks page versions (default 1h)
