@@ -65,13 +65,39 @@ func TestSplitRespectsMaxTokens(t *testing.T) {
 	}
 	prevEnd := 0
 	for _, c := range chunks {
-		if tok := EstimateTokens(c.Content); tok > max {
-			t.Errorf("chunk %s has %d tokens > %d", c.ID, tok, max)
+		if tok := EstimateTokens(c.Content); tok > max+minTokens {
+			t.Errorf("chunk %s has %d tokens > %d", c.ID, tok, max+minTokens)
 		}
 		if c.StartLine != prevEnd+1 {
 			t.Errorf("chunk %s starts at %d, want %d (contiguous)", c.ID, c.StartLine, prevEnd+1)
 		}
 		prevEnd = c.EndLine
+	}
+}
+
+func TestSplitMergesTinyChunks(t *testing.T) {
+	section := strings.Repeat("some real note content here\n", 12)
+	content := "# A\n" + section + "## B\n" + section + "\n匯出到試算表\n\n---\n" + "## C\n" + section
+	chunks := Split(doc(content, "markdown"), 100)
+	if len(chunks) != 3 {
+		t.Fatalf("want 3 chunks, got %d", len(chunks))
+	}
+	if !strings.HasSuffix(chunks[1].Content, "---") || !strings.HasPrefix(chunks[1].Content, "## B") {
+		t.Errorf("tiny fragment should merge into section B, got %q", chunks[1].Content)
+	}
+	if chunks[1].EndLine != 30 || chunks[2].StartLine != 31 {
+		t.Errorf("lines: B ends %d, C starts %d; want 30, 31", chunks[1].EndLine, chunks[2].StartLine)
+	}
+
+	// A tiny leading chunk merges forward into the next one.
+	chunks = Split(doc("# Title\n\n## Body\n"+strings.Repeat("body text line here\n", 30), "markdown"), 100)
+	if !strings.HasPrefix(chunks[0].Content, "# Title") || chunks[0].StartLine != 1 {
+		t.Errorf("leading title should merge into the first chunk, got %q", chunks[0].Content[:20])
+	}
+	for _, c := range chunks {
+		if EstimateTokens(c.Content) < minTokens {
+			t.Errorf("chunk %s is still tiny", c.ID)
+		}
 	}
 }
 

@@ -35,8 +35,13 @@ func EstimateTokens(s string) int {
 
 var mdHeading = regexp.MustCompile(`^#{1,6}\s`)
 
-// Split cuts a document into chunks of at most maxTokens (estimated), preferring Markdown headings
-// or top-level declarations (non-indented lines after a blank line) as cut points.
+// minTokens is the smallest chunk worth its own embedding. Fragments like a lone "---" or a table
+// footer embed to near-generic vectors that match short queries by accident.
+const minTokens = 30
+
+// Split cuts a document into chunks of about maxTokens (estimated), preferring Markdown headings
+// or top-level declarations (non-indented lines after a blank line) as cut points. A chunk under
+// minTokens is merged into its neighbour, so a chunk may exceed maxTokens by up to minTokens.
 func Split(doc source.Document, maxTokens int) []Chunk {
 	lines := strings.Split(doc.Content, "\n")
 	lineTok := make([]int, len(lines))
@@ -44,7 +49,16 @@ func Split(doc source.Document, maxTokens int) []Chunk {
 		lineTok[i] = EstimateTokens(l) + 1
 	}
 
+	tokens := func(s, e int) int {
+		t := 0
+		for i := s; i < e; i++ {
+			t += lineTok[i]
+		}
+		return t
+	}
+
 	var chunks []Chunk
+	lastTok := 0
 	emit := func(s, e int) {
 		for s < e && strings.TrimSpace(lines[s]) == "" {
 			s++
@@ -55,6 +69,15 @@ func Split(doc source.Document, maxTokens int) []Chunk {
 		if s == e {
 			return
 		}
+		t := tokens(s, e)
+		if n := len(chunks); n > 0 && (t < minTokens || lastTok < minTokens) {
+			last := &chunks[n-1]
+			last.Content = strings.Join(lines[last.StartLine-1:e], "\n")
+			last.EndLine = e
+			lastTok += t
+			return
+		}
+		lastTok = t
 		chunks = append(chunks, Chunk{
 			ID:        fmt.Sprintf("%s#%d", doc.ID, len(chunks)),
 			DocID:     doc.ID,
@@ -66,13 +89,6 @@ func Split(doc source.Document, maxTokens int) []Chunk {
 			StartLine: s + 1,
 			EndLine:   e,
 		})
-	}
-	tokens := func(s, e int) int {
-		t := 0
-		for i := s; i < e; i++ {
-			t += lineTok[i]
-		}
-		return t
 	}
 
 	starts := sectionStarts(lines, doc.Metadata["language"] == "markdown")
